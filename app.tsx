@@ -9,7 +9,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   definePluginApp,
-  useComposerView,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
@@ -357,16 +356,9 @@ function NewWorktreeControl({
   );
 }
 
-/** Composer action on the New Thread page. */
-function ComposerCreateAction() {
-  const rpc = useRpc<typeof rpcContract>();
-  const view = useComposerView();
-
-  const projectId =
-    view.scope.kind === "new-thread" ? view.scope.projectId : null;
-
-  return <NewWorktreeControl projectId={projectId} rpc={rpc} />;
-}
+// There is deliberately no composer action registration: the homepage section
+// renders on the same root-compose surface, so an action-row button would be a
+// second identical control a few pixels from the divider one.
 
 /** One worktree in the homepage list. */
 /**
@@ -631,7 +623,18 @@ function WorktreesSection({ projectId }: { projectId: string | null }) {
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-2">
+      {/* Reads as an alternative to the prompt box directly above it. This is
+          also the section's heading: the host's own <h2> is suppressed by the
+          content script so the label is not stated twice. */}
+      <div className="flex items-center gap-3">
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+        <h2 className="text-xs font-medium text-muted-foreground">
+          or start without a prompt
+        </h2>
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      </div>
+
+      <div className="flex flex-wrap items-end justify-center gap-2">
         <div className="flex min-w-0 flex-col gap-1">
           <label
             htmlFor={selectId}
@@ -700,15 +703,24 @@ export default definePluginApp((app) => {
     component: HomepageSection,
   });
 
-  app.composer.customize({
-    id: "worktree-composer",
-    scopes: ["new-thread"],
-    actions: [{ id: "new-worktree", component: ComposerCreateAction }],
-  });
-
   // An unused worktree thread reports `error`, because the empty input that
   // provisions the worktree never reaches a provider. Relabel those rows so a
   // healthy worktree does not wear a failure glyph.
+  // The homepage-section slot always renders a host <h2> above the component.
+  // This section's heading is its own labelled divider, so the host copy would
+  // state the same thing twice. Hide just this plugin's heading; if the host
+  // markup ever changes the rule stops matching and the plain heading returns,
+  // which is a harmless fallback rather than a broken section.
+  app.contentScripts.register({
+    id: "worktree-section-heading",
+    mount() {
+      const style = document.createElement("style");
+      style.textContent =
+        '[id="plugin-homepage:worktree:worktrees"] > h2 { display: none; }';
+      document.head.append(style);
+      return () => style.remove();
+    },
+  });
   app.contentScripts.register({
     id: "worktree-row-status",
     mount({ signal, experimental_setThreadRowStatus }) {

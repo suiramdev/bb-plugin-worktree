@@ -23,18 +23,28 @@ bb plugin install https://github.com/suiramdev/bb-plugin-worktree
 
 ## Use it
 
-**From the New Thread page.** A `New worktree` button sits in the composer's
-action row. One click creates the worktree from the project's default base and
-opens a terminal in it.
+**From the New Thread page.** Below the prompt box, under a divider reading
+*or start without a prompt*, sits a `New worktree` button. One click creates the
+worktree from the project's default base and opens a terminal in it — no prompt,
+no agent turn.
 
-**From another branch.** The chevron beside that button opens a searchable
-branch picker listing both local and remote branches. Search runs server-side
-over the whole set, so it is not limited to the first page. Picking a branch
-creates the worktree from it; the plain click still needs no input at all.
+```
+┌──────────────────────────────────────────┐
+│  What are we working on?                 │
+└──────────────────────────────────────────┘
 
-**From the home page.** The `Worktrees` section has the same control, plus a
-list of what you have with per-row actions to open a terminal, open your editor,
-copy the path, or delete the worktree.
+──────── or start without a prompt ────────
+
+        Project [ my-repo ▾ ]  [ ⎇ New worktree │ ▾ ]
+```
+
+**From another branch.** The chevron opens a searchable branch picker listing
+local and remote branches together. Search runs server-side over the whole set,
+so it is not limited to the first page. Picking a branch creates the worktree
+from it; the plain click still needs no input at all.
+
+Below the control, the same section lists the worktrees you have, with per-row
+actions to open a terminal, open your editor, copy the path, or delete it.
 
 **From a terminal or an agent.**
 

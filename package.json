@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-worktree",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Create a git worktree in BB without being prompted for anything, and open a terminal in it.",
   "license": "MIT",
