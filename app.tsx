@@ -31,6 +31,20 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
 
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
@@ -64,17 +78,28 @@ function useCreateWorktree(rpc: Rpc) {
   const [isCreating, setIsCreating] = useState(false);
 
   const create = useCallback(
-    async (projectId: string): Promise<WorktreeRow | null> => {
+    async (
+      projectId: string,
+      baseBranch?: string,
+    ): Promise<WorktreeRow | null> => {
       setIsCreating(true);
       try {
-        const { worktree } = await rpc.call("createWorktree", { projectId });
+        const { worktree } = await rpc.call("createWorktree", {
+          projectId,
+          ...(baseBranch ? { baseBranch } : {}),
+        });
         toast.success(`Worktree ${worktree.title} is ready`, {
-          description: worktree.branch ?? undefined,
+          description: worktree.branch
+            ? `${worktree.branch} from ${worktree.baseBranch ?? "the default branch"}`
+            : undefined,
         });
         return worktree as WorktreeRow;
       } catch (error) {
         toast.error("Could not create the worktree", {
           description: errorMessage(error),
+          // Creation takes several seconds; a failure that auto-dismisses
+          // while the user looks away reads as nothing having happened.
+          duration: Infinity,
         });
         return null;
       } finally {
@@ -87,47 +112,183 @@ function useCreateWorktree(rpc: Rpc) {
   return { create, isCreating };
 }
 
+/** Searchable base-branch list, local and remote in one popover. */
+function BranchPicker({
+  projectId,
+  rpc,
+  onPick,
+}: {
+  projectId: string;
+  rpc: Rpc;
+  onPick: (baseBranch: string | undefined) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [result, setResult] = useState<{
+    local: string[];
+    remote: string[];
+    defaultBase: string | null;
+    truncated: boolean;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Search runs server-side over the full branch set, so the list is not
+  // limited to whatever the first page happened to contain.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(
+      () => {
+        void rpc
+          .call("listBranches", {
+            projectId,
+            ...(query.trim() ? { query: query.trim() } : {}),
+          })
+          .then(
+            (next) => {
+              if (!cancelled) {
+                setResult(next);
+                setError(null);
+              }
+            },
+            (failure: unknown) => {
+              if (!cancelled) setError(errorMessage(failure));
+            },
+          );
+      },
+      query ? 200 : 0,
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [rpc, projectId, query]);
+
+  return (
+    <Command shouldFilter={false}>
+      <CommandInput
+        value={query}
+        onValueChange={setQuery}
+        placeholder="Search branches"
+      />
+      <CommandList>
+        {error !== null ? (
+          <div className="p-3 text-sm text-destructive">
+            Could not load branches. {error}
+          </div>
+        ) : result === null ? (
+          <div className="p-3 text-sm text-muted-foreground">Loading…</div>
+        ) : (
+          <>
+            <CommandEmpty>No branch matches “{query}”.</CommandEmpty>
+
+            {query.trim() === "" && (
+              <CommandGroup heading="Default">
+                <CommandItem
+                  value="__default__"
+                  onSelect={() => onPick(undefined)}
+                >
+                  <Icon
+                    name="GitBranch"
+                    aria-hidden="true"
+                    className="mr-2 size-4"
+                  />
+                  <span>Project default</span>
+                  {result.defaultBase && (
+                    <span className="ml-2 truncate font-mono text-xs text-muted-foreground">
+                      {result.defaultBase}
+                    </span>
+                  )}
+                </CommandItem>
+              </CommandGroup>
+            )}
+
+            {result.local.length > 0 && (
+              <CommandGroup heading="Local">
+                {result.local.map((branch) => (
+                  <CommandItem
+                    key={`local:${branch}`}
+                    value={`local:${branch}`}
+                    onSelect={() => onPick(branch)}
+                  >
+                    <span className="truncate font-mono text-xs">{branch}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {result.remote.length > 0 && (
+              <CommandGroup heading="Remote">
+                {result.remote.map((branch) => (
+                  <CommandItem
+                    key={`remote:${branch}`}
+                    value={`remote:${branch}`}
+                    onSelect={() => onPick(branch)}
+                  >
+                    <span className="truncate font-mono text-xs">{branch}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {result.truncated && query.trim() === "" && (
+              <p className="px-3 py-2 text-xs text-muted-foreground">
+                Showing the first branches. Search to find others.
+              </p>
+            )}
+          </>
+        )}
+      </CommandList>
+    </Command>
+  );
+}
+
 /**
- * Composer action. Renders one 28px-safe inline control, per the host's
- * action-row contract.
+ * Split control: the main button creates from the project's default base in
+ * one click, the trailing button opens the base-branch picker. Keeping both
+ * means adding branch choice costs the no-prompt path nothing.
  */
-function ComposerCreateAction() {
-  const rpc = useRpc<typeof rpcContract>();
-  const view = useComposerView();
+function NewWorktreeControl({
+  projectId,
+  rpc,
+  onCreated,
+  className,
+}: {
+  projectId: string | null;
+  rpc: Rpc;
+  onCreated?: (row: WorktreeRow) => void;
+  className?: string;
+}) {
   const { create, isCreating } = useCreateWorktree(rpc);
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
 
-  const projectId =
-    view.scope.kind === "new-thread" ? view.scope.projectId : null;
+  // `aria-disabled` rather than `disabled` keeps the control focusable, so the
+  // tooltip explaining why it is unavailable is reachable from the keyboard.
+  const isUnavailable = projectId === null;
+  const isBlocked = isUnavailable || isCreating;
 
-  // Without a project there is no repository to branch from, so the control is
-  // disabled rather than hidden: a control that appears and disappears while
-  // you change the project picker is harder to find than one that waits.
-  const isDisabled = projectId === null || isCreating;
-
-  const hint =
-    projectId === null
-      ? "Choose a project to create a worktree"
-      : "Create a worktree and open a terminal in it";
+  const run = (baseBranch?: string) => {
+    if (projectId === null || isCreating) return;
+    void create(projectId, baseBranch).then((row) => {
+      if (row && onCreated) onCreated(row);
+    });
+  };
 
   return (
     <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {/* A disabled button is not hoverable, so the wrapper keeps the
-              tooltip reachable in the state where the hint matters most. */}
-          <span>
+      <div className={cn("flex items-center", className)}>
+        <Tooltip>
+          <TooltipTrigger asChild>
             <Button
               type="button"
               size="sm"
               variant="ghost"
-              disabled={isDisabled}
+              aria-disabled={isBlocked}
               aria-label="New worktree"
-              aria-describedby={undefined}
-              className={CONTROL_HOVER_TRANSITION}
-              onClick={() => {
-                if (projectId === null) return;
-                void create(projectId);
-              }}
+              className={cn(
+                CONTROL_HOVER_TRANSITION,
+                "rounded-e-none",
+                isBlocked && "opacity-50",
+              )}
+              onClick={() => run()}
             >
               <Icon
                 name={isCreating ? "Loading" : "GitBranch"}
@@ -140,12 +301,71 @@ function ComposerCreateAction() {
                 {isCreating ? "Creating…" : "New worktree"}
               </span>
             </Button>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent>{hint}</TooltipContent>
-      </Tooltip>
+          </TooltipTrigger>
+          <TooltipContent>
+            {isUnavailable
+              ? "Choose a project to create a worktree"
+              : "Create a worktree from the default branch and open a terminal"}
+          </TooltipContent>
+        </Tooltip>
+
+        <Popover open={isPickerOpen} onOpenChange={setIsPickerOpen}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-disabled={isBlocked}
+                  aria-label="Choose a base branch"
+                  className={cn(
+                    CONTROL_HOVER_TRANSITION,
+                    "rounded-s-none px-1.5",
+                    isBlocked && "opacity-50",
+                  )}
+                  onClick={(event) => {
+                    if (isBlocked) event.preventDefault();
+                  }}
+                >
+                  <Icon
+                    name="ChevronDown"
+                    aria-hidden="true"
+                    className="size-4"
+                  />
+                </Button>
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent>Choose a base branch</TooltipContent>
+          </Tooltip>
+
+          <PopoverContent className="w-80 p-0" align="start">
+            {projectId !== null && (
+              <BranchPicker
+                projectId={projectId}
+                rpc={rpc}
+                onPick={(baseBranch) => {
+                  setIsPickerOpen(false);
+                  run(baseBranch);
+                }}
+              />
+            )}
+          </PopoverContent>
+        </Popover>
+      </div>
     </TooltipProvider>
   );
+}
+
+/** Composer action on the New Thread page. */
+function ComposerCreateAction() {
+  const rpc = useRpc<typeof rpcContract>();
+  const view = useComposerView();
+
+  const projectId =
+    view.scope.kind === "new-thread" ? view.scope.projectId : null;
+
+  return <NewWorktreeControl projectId={projectId} rpc={rpc} />;
 }
 
 /** One worktree in the homepage list. */
@@ -349,8 +569,6 @@ function WorktreeListRow({
 /** The homepage "Worktrees" section. */
 function WorktreesSection({ projectId }: { projectId: string | null }) {
   const rpc = useRpc<typeof rpcContract>();
-  const { create, isCreating } = useCreateWorktree(rpc);
-
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [rows, setRows] = useState<WorktreeRow[] | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
@@ -425,7 +643,7 @@ function WorktreesSection({ projectId }: { projectId: string | null }) {
             id={selectId}
             value={selectedProjectId ?? ""}
             onChange={(event) => setSelectedProjectId(event.target.value || null)}
-            className="h-8 min-w-40 max-w-full rounded-md border border-input bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="h-8 min-w-40 max-w-full rounded-md border border-input bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             {projects.length === 0 && <option value="">No projects</option>}
             {projects.map((project) => (
@@ -436,27 +654,11 @@ function WorktreesSection({ projectId }: { projectId: string | null }) {
           </select>
         </div>
 
-        <Button
-          type="button"
-          size="sm"
-          disabled={selectedProjectId === null || isCreating}
-          className={CONTROL_HOVER_TRANSITION}
-          onClick={() => {
-            if (!selectedProjectId) return;
-            void create(selectedProjectId).then((created) => {
-              if (created) refresh();
-            });
-          }}
-        >
-          <Icon
-            name={isCreating ? "Loading" : "Plus"}
-            aria-hidden="true"
-            className={isCreating ? "size-4 motion-safe:animate-spin" : "size-4"}
-          />
-          <span className="ml-1.5">
-            {isCreating ? "Creating…" : "New worktree"}
-          </span>
-        </Button>
+        <NewWorktreeControl
+          projectId={selectedProjectId}
+          rpc={rpc}
+          onCreated={() => refresh()}
+        />
       </div>
 
       {rows === null ? (

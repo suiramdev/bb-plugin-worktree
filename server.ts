@@ -27,6 +27,8 @@ import { z } from "zod";
 /** How long to wait for BB to provision the worktree before giving up. */
 const PROVISION_TIMEOUT_MS = 120_000;
 const PROVISION_POLL_MS = 400;
+/** Per-side cap on the branch picker; search narrows past it. */
+const BRANCH_LIST_LIMIT = 50;
 
 const worktreeSchema = z.object({
   threadId: z.string(),
@@ -53,6 +55,21 @@ export const rpcContract = defineRpcContract({
   listWorktrees: {
     input: z.object({ projectId: z.string().optional() }).strict(),
     output: z.object({ worktrees: z.array(worktreeSchema) }),
+  },
+  listBranches: {
+    input: z
+      .object({ projectId: z.string(), query: z.string().optional() })
+      .strict(),
+    output: z.object({
+      /** Branches that exist in the project's own checkout. */
+      local: z.array(z.string()),
+      /** Remote-tracking branches, already prefixed (`origin/main`). */
+      remote: z.array(z.string()),
+      /** What a worktree branches from when no base is chosen. */
+      defaultBase: z.string().nullable(),
+      /** True when the result was capped and search would narrow it. */
+      truncated: z.boolean(),
+    }),
   },
   createWorktree: {
     input: z
@@ -286,6 +303,27 @@ export default async function plugin(bb: BbPluginApi) {
 
     async listWorktrees({ projectId }) {
       return { worktrees: await readWorktrees(projectId) };
+    },
+
+    async listBranches({ projectId, query }) {
+      const hostId = await resolveHostId(projectId);
+      const result = await bb.sdk.projects.branches({
+        projectId,
+        hostId,
+        query,
+        // The query schema types this as a string.
+        limit: String(BRANCH_LIST_LIMIT),
+      });
+
+      return {
+        local: result.branches,
+        remote: result.remoteBranches,
+        defaultBase:
+          result.defaultWorktreeBaseBranch ??
+          result.originDefaultBranch ??
+          result.defaultBranch,
+        truncated: result.branchesTruncated || result.remoteBranchesTruncated,
+      };
     },
 
     async createWorktree(input) {
