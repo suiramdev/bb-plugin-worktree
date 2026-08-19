@@ -6,7 +6,7 @@
 //   3. A content script that relabels the sidebar row for worktree threads,
 //      so the harmless `error` status they carry until first use never reads
 //      as a broken thread.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   definePluginApp,
   useRpc,
@@ -616,11 +616,6 @@ function WorktreesSection({ projectId }: { projectId: string | null }) {
 
   useEffect(() => refresh(), [refresh]);
 
-  const selectedProjectName = useMemo(
-    () => projects.find((p) => p.id === selectedProjectId)?.name ?? null,
-    [projects, selectedProjectId],
-  );
-
   return (
     <section className="flex flex-col gap-3">
       {/* Reads as an alternative to the prompt box directly above it. This is
@@ -670,13 +665,7 @@ function WorktreesSection({ projectId }: { projectId: string | null }) {
         <p className="text-sm text-destructive">
           Could not load worktrees. {loadError}
         </p>
-      ) : rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No worktrees yet
-          {selectedProjectName ? ` in ${selectedProjectName}` : ""}. Creating one
-          takes a few seconds and starts a terminal in it.
-        </p>
-      ) : (
+      ) : rows.length === 0 ? null : (
         <ul className="flex flex-col gap-1.5">
           {rows.map((row) => (
             <WorktreeListRow
